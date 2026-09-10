@@ -1,0 +1,66 @@
+# Python environments and generated caches
+/.venv/
+/venv/
+/env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local application data, catalogs and user settings
+.env
+.env.*
+!.env.example
+settings.json
+catalogs/
+thumbnails/
+
+# Generated local reports and obsolete root asset folder
+test-results/
+reports/
+screenshots/
+/tests/
+/abrir_party_dash_viewer.bat
+/branding/
+*.spec
+/legacy/
+/licenses/
+
+# Game content and generated exports (never commit the installation)
+/asset/
+/assets/game/
+PartyDashViewer/
+UmaAssetExplorer/
+*.bin
+*.assets
+*.pak
+*.bundle
+exports/
+exports-*/
+
+# Build outputs and temporary packaging files
+/build/
+/dist/
+*.zip
+*.7z
+*.tar
+*.gz
+*.tmp
+*.bak
+*.log
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+Desktop.ini

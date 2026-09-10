@@ -1,0 +1,174 @@
+name: Windows portable
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: party-dash-release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-build.txt
+
+      - name: Calculate and persist release version
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $isAutomaticRelease = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main'
+
+          if ($isAutomaticRelease) {
+            # Always work from the current remote main branch. This also lets a
+            # queued run see a version commit created by an earlier run.
+            git fetch origin main
+            git checkout -B main origin/main
+
+            $headMessage = (git log -1 --pretty=%s).Trim()
+            $releaseCommit = [regex]::Match($headMessage, '^chore: release v(\d+\.\d+\.\d+)$')
+
+            # If a previous run already committed the version but failed before
+            # publishing the Release, reuse that version on a retry.
+            if ($releaseCommit.Success) {
+              $nextVersion = [version]$releaseCommit.Groups[1].Value
+            } else {
+              $response = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not query GitHub Releases.' }
+              $releases = $response | ConvertFrom-Json
+
+              $latestVersion = $null
+              foreach ($release in @($releases)) {
+                if ($release.draft -or $release.prerelease) { continue }
+                $match = [regex]::Match($release.tag_name, '^v(\d+)\.(\d+)\.(\d+)$')
+                if (-not $match.Success) { continue }
+
+                $candidate = [version]::new(
+                  [int]$match.Groups[1].Value,
+                  [int]$match.Groups[2].Value,
+                  [int]$match.Groups[3].Value
+                )
+                if ($null -eq $latestVersion -or $candidate -gt $latestVersion) {
+                  $latestVersion = $candidate
+                }
+              }
+
+              $currentMatch = [regex]::Match((Get-Content version.py -Raw), 'VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
+              if (-not $currentMatch.Success) { throw 'VERSION was not found in version.py.' }
+              $currentVersion = [version]$currentMatch.Groups[1].Value
+
+              if ($null -eq $latestVersion) {
+                # First stable release: use the version already declared by the project.
+                $nextVersion = $currentVersion
+              } else {
+                # Every subsequent change increments only the patch component.
+                $nextVersion = [version]::new(
+                  $latestVersion.Major,
+                  $latestVersion.Minor,
+                  $latestVersion.Build + 1
+                )
+              }
+            }
+
+            $versionText = "$($nextVersion.Major).$($nextVersion.Minor).$($nextVersion.Build)"
+            $versionPath = Join-Path $PWD 'version.py'
+            $source = Get-Content $versionPath -Raw
+            $currentInFile = [regex]::Match($source, 'VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
+            if (-not $currentInFile.Success) { throw 'VERSION was not found in version.py.' }
+
+            if ($currentInFile.Groups[1].Value -ne $versionText) {
+              $replacement = 'VERSION = "' + $versionText + '"'
+              $updated = [regex]::Replace($source, 'VERSION\s*=\s*"\d+\.\d+\.\d+"', $replacement, 1)
+              Set-Content -Path $versionPath -Value $updated -NoNewline -Encoding utf8NoBOM
+            }
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add version.py
+            git diff --cached --quiet
+            $hasChanges = $LASTEXITCODE -ne 0
+            if ($hasChanges) {
+              git commit -m "chore: release v$versionText"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not create the release version commit.' }
+              git push origin HEAD:main
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push the release version commit.' }
+            }
+          } else {
+            $versionText = (& python -c "from version import VERSION; print(VERSION)").Trim()
+            if (-not $versionText) { throw 'VERSION was not found in version.py.' }
+          }
+
+          "version=$versionText" >> $env:GITHUB_OUTPUT
+          "commit=$((git rev-parse HEAD).Trim())" >> $env:GITHUB_OUTPUT
+
+      - run: ./build.ps1
+        shell: pwsh
+
+      - name: Validate packaged executable
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ./dist/PartyDashViewer/PartyDashViewer.exe -ArgumentList --self-test -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Executable self-test failed' }
+
+      - name: Create SHA-256 checksum
+        shell: pwsh
+        run: |
+          $archive = Get-Item "dist/PartyDashViewer-v${{ steps.version.outputs.version }}-Windows-x64.zip"
+          $hash = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($archive.Name)" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PartyDashViewer-v${{ steps.version.outputs.version }}-Windows-x64
+          path: |
+            dist/PartyDashViewer-v${{ steps.version.outputs.version }}-Windows-x64.zip
+            dist/SHA256SUMS.txt
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PartyDashViewer-v${{ needs.build.outputs.version }}-Windows-x64
+          path: release
+
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.build.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            release/*.zip \
+            release/SHA256SUMS.txt \
+            --target "$RELEASE_COMMIT" \
+            --generate-notes \
+            --title "PartyDash Viewer $RELEASE_TAG"

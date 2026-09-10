@@ -1,0 +1,5 @@
+APP_NAME = "PartyDash Viewer"
+VERSION = "1.0.0"
+DISPLAY_VERSION = f"v{VERSION}"
+REPOSITORY = "linwaru/PartyDash-Viewer"
+RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"

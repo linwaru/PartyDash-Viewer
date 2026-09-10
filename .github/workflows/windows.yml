@@ -16,107 +16,26 @@ jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements-build.txt
 
-      - name: Calculate and persist release version
+      - name: Read release version
         id: version
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $isAutomaticRelease = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main'
-
-          if ($isAutomaticRelease) {
-            # Always work from the current remote main branch. This also lets a
-            # queued run see a version commit created by an earlier run.
-            git fetch origin main
-            git checkout -B main origin/main
-
-            $headMessage = (git log -1 --pretty=%s).Trim()
-            $releaseCommit = [regex]::Match($headMessage, '^chore: release v(\d+\.\d+\.\d+)$')
-
-            # If a previous run already committed the version but failed before
-            # publishing the Release, reuse that version on a retry.
-            if ($releaseCommit.Success) {
-              $nextVersion = [version]$releaseCommit.Groups[1].Value
-            } else {
-              $response = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
-              if ($LASTEXITCODE -ne 0) { throw 'Could not query GitHub Releases.' }
-              $releases = $response | ConvertFrom-Json
-
-              $latestVersion = $null
-              foreach ($release in @($releases)) {
-                if ($release.draft -or $release.prerelease) { continue }
-                $match = [regex]::Match($release.tag_name, '^v(\d+)\.(\d+)\.(\d+)$')
-                if (-not $match.Success) { continue }
-
-                $candidate = [version]::new(
-                  [int]$match.Groups[1].Value,
-                  [int]$match.Groups[2].Value,
-                  [int]$match.Groups[3].Value
-                )
-                if ($null -eq $latestVersion -or $candidate -gt $latestVersion) {
-                  $latestVersion = $candidate
-                }
-              }
-
-              $currentMatch = [regex]::Match((Get-Content version.py -Raw), 'VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
-              if (-not $currentMatch.Success) { throw 'VERSION was not found in version.py.' }
-              $currentVersion = [version]$currentMatch.Groups[1].Value
-
-              if ($null -eq $latestVersion) {
-                # First stable release: use the version already declared by the project.
-                $nextVersion = $currentVersion
-              } else {
-                # Every subsequent change increments only the patch component.
-                $nextVersion = [version]::new(
-                  $latestVersion.Major,
-                  $latestVersion.Minor,
-                  $latestVersion.Build + 1
-                )
-              }
-            }
-
-            $versionText = "$($nextVersion.Major).$($nextVersion.Minor).$($nextVersion.Build)"
-            $versionPath = Join-Path $PWD 'version.py'
-            $source = Get-Content $versionPath -Raw
-            $currentInFile = [regex]::Match($source, 'VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
-            if (-not $currentInFile.Success) { throw 'VERSION was not found in version.py.' }
-
-            if ($currentInFile.Groups[1].Value -ne $versionText) {
-              $replacement = 'VERSION = "' + $versionText + '"'
-              $updated = [regex]::Replace($source, 'VERSION\s*=\s*"\d+\.\d+\.\d+"', $replacement, 1)
-              Set-Content -Path $versionPath -Value $updated -NoNewline -Encoding utf8NoBOM
-            }
-
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add version.py
-            git diff --cached --quiet
-            $hasChanges = $LASTEXITCODE -ne 0
-            if ($hasChanges) {
-              git commit -m "chore: release v$versionText"
-              if ($LASTEXITCODE -ne 0) { throw 'Could not create the release version commit.' }
-              git push origin HEAD:main
-              if ($LASTEXITCODE -ne 0) { throw 'Could not push the release version commit.' }
-            }
-          } else {
-            $versionText = (& python -c "from version import VERSION; print(VERSION)").Trim()
-            if (-not $versionText) { throw 'VERSION was not found in version.py.' }
-          }
-
+          $versionText = (& python -c "from version import VERSION; print(VERSION)").Trim()
+          if ($versionText -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION is invalid in version.py.' }
           "version=$versionText" >> $env:GITHUB_OUTPUT
           "commit=$((git rev-parse HEAD).Trim())" >> $env:GITHUB_OUTPUT
 
@@ -136,7 +55,7 @@ jobs:
           $hash = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($archive.Name)" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PartyDashViewer-v${{ steps.version.outputs.version }}-Windows-x64
           path: |
@@ -150,7 +69,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: PartyDashViewer-v${{ needs.build.outputs.version }}-Windows-x64
           path: release

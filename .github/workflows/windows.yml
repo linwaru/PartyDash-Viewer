@@ -55,7 +55,7 @@ jobs:
           $hash = (Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($archive.Name)" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: PartyDashViewer-v${{ steps.version.outputs.version }}-Windows-x64
           path: |
@@ -69,7 +69,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: PartyDashViewer-v${{ needs.build.outputs.version }}-Windows-x64
           path: release
@@ -80,12 +80,13 @@ jobs:
           RELEASE_TAG: v${{ needs.build.outputs.version }}
           RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists; nothing to publish."
             exit 0
           fi
 
           gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             release/*.zip \
             release/SHA256SUMS.txt \
             --target "$RELEASE_COMMIT" \
